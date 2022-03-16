@@ -3,51 +3,68 @@
 #include <WinSock2.h>
 #pragma comment(lib,"ws2_32")
 #include <WS2tcpip.h>
+#include <windows.h>
 #include <stdexcept>
 #include <thread>
 #include <new>
-#include <windows.h>
 #include <crtdbg.h>
 
-#include "dump.h"
-#include "log.h"
-#include "ObjectFreeListTLS.h"
-#include "serverError.h"
-#include "stack.h"
-#include "stringParser.h"
-#include "ringBuffer.h"
-#include "protocolBuffer.h"
-#include "lockFreeQueue.h"
-#include "lockFreeStack.h"
-#include "packetPtr_LanClient.h"
+///////////////////////////////////////////////////////////////////
+// lib
+#include "dump/headers/dump.h"
+#include "log/headers/log.h"
+#include "protocolBuffer/headers/protocolBuffer.h"
+#include "packetPointer/headers/packetPointer.h"
+#include "ringBuffer/headers/ringBuffer.h"
+
+#include "objectFreeListTLS/headers/objectFreeListTLS.h"
+#include "stack/headers/stack.h"
+#include "queue/headers/queue.h"
+
+#pragma comment(lib, "lib/dump/dump")
+#pragma comment(lib, "lib/log/log")
+#pragma comment(lib, "lib/protocolBuffer/protocolBuffer")
+#pragma comment(lib, "lib/packetPointer/packetPointer")
+#pragma comment(lib, "lib/ringBuffer/ringBuffer")
+///////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////
+// header
 #include "common.h"
+#include "packetPointer_LanServer.h"
+///////////////////////////////////////////////////////////////////
 
 class CLanClient{
 
 public:
 
 	CLanClient();
-
+	~CLanClient();
+	
 	bool Connect(const wchar_t* ip, unsigned short port, int maxPacketNum, int workerThreadNum, bool onNagle);
 	bool Disconnect();
-	bool sendPacket(CPacketPtrLan);
+	bool sendPacket(CPacketPtr_Lan);
 
 	virtual void OnEnterJoinServer() = 0;
 	virtual void OnLeaveServer() = 0;
 
-	virtual void OnRecv(CPacketPtr) = 0;
+	virtual void OnRecv(CPacketPointer) = 0;
 	virtual void OnSend(int sendsize) = 0;
 
 	virtual void OnError(int errorcode, const wchar_t*) = 0;
 
+	inline int getSendTPS(){
+		return _sendTPS;
+	}
+	inline int getRecvTPS(){
+		return _recvTPS;
+	}
+
 protected:
+	
+	SOCKET _sock;
 
-
-	// ID의 하위 6바이트는 세션 메모리에 대한 재사용 횟수
-	// 상위 2바이트는 세션 인덱스
-	unsigned __int64 _sessionID; // 서버 가동 중에는 고유한 세션 ID
-
-	CLockFreeQueue<CPacketPtr> _sendQueue;
+	CQueue<CPacketPointer> _sendQueue;
 	CRingBuffer _recvBuffer;
 		
 	// send를 1회로 제한하기 위한 플래그
@@ -56,24 +73,27 @@ protected:
 	OVERLAPPED _sendOverlapped;
 	OVERLAPPED _recvOverlapped;
 
-	CPacketPtr* _packets;
+	CPacketPointer* _packets;
 	int _packetNum;
 	int _packetCnt;
 
 	int _workerThreadNum;
 	HANDLE* _workerThread;
 
-	SOCKET _sock;
-
 	HANDLE _iocp;
 
 	// free list에서 할당할 때 사용
 	HANDLE _heap;
 
+	CRITICAL_SECTION _lock;
+
+	int _sendCnt;
+	int _recvCnt;
+	int _sendTPS;
+	int _recvTPS;
+
 	const wchar_t* _ip;
 	unsigned short _port;
-
-	void init();
 
 	void sendPost();
 	void recvPost();

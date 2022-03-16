@@ -1,32 +1,19 @@
-#include "lanClient.h"
 
-CLanClient::CLanClient(): _recvBuffer(5000){
+
+#include "headers/lanClient.h"
+
+CLanClient::CLanClient(): _recvBuffer(5000), _sendQueue(5000){
 
 	_heap = HeapCreate(0,0,0);
 
-	init();
-	
+	InitializeCriticalSectionAndSpinCount(&_lock, 0);
+
 }
+CLanClient::~CLanClient(){
 
-void CLanClient::init(){
-	
-	_sessionID = 0;
+	HeapDestroy(_heap);
 
-	_sendPosted = false;
-
-	_packetNum = 0;
-	_packetCnt = 0;
-	_packets = nullptr;
-
-	_workerThreadNum = 0;
-	_workerThread = nullptr;
-
-	_sock = NULL;
-
-	_iocp = NULL;
-
-	ZeroMemory(&_sendOverlapped, sizeof(OVERLAPPED));
-	ZeroMemory(&_recvOverlapped, sizeof(OVERLAPPED));
+	DeleteCriticalSection(&_lock);
 
 }
 
@@ -34,32 +21,36 @@ unsigned __stdcall CLanClient::connectFunc(void* args){
 
 	CLanClient* client = (CLanClient*)args;
 
-	SOCKADDR_IN addr;
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(client->_port);
-	InetPtonW(AF_INET, client->_ip, &addr.sin_addr.S_un.S_addr);
+	EnterCriticalSection(&client->_lock); {
 
-	int connectError;
-	int connectResult;
-	for(;;){
-		connectResult = connect(client->_sock, (SOCKADDR*)&addr, sizeof(SOCKADDR_IN));
-		if(connectResult == SOCKET_ERROR){
+		SOCKADDR_IN addr;
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(client->_port);
+		InetPtonW(AF_INET, client->_ip, &addr.sin_addr.S_un.S_addr);
+
+		int connectError;
+		int connectResult;
+		for(;;){
+			connectResult = connect(client->_sock, (SOCKADDR*)&addr, sizeof(SOCKADDR_IN));
+			if(connectResult == SOCKET_ERROR){
 		
-			connectError = WSAGetLastError();
-			if(connectError == WSAEISCONN){
-				CreateIoCompletionPort((HANDLE)client->_sock, (HANDLE)client->_iocp, NULL, 0);
-				client->OnEnterJoinServer();
-				break;
-			} else if(connectError != WSAEWOULDBLOCK){
-				client->OnError(connectError, L"Connect: Connect Error");
-				return 1;
-			} 
+				connectError = WSAGetLastError();
+				if(connectError == WSAEISCONN){
+					CreateIoCompletionPort((HANDLE)client->_sock, (HANDLE)client->_iocp, NULL, 0);
+					client->OnEnterJoinServer();
+					break;
+				} else if(connectError != WSAEWOULDBLOCK){
+					client->OnError(connectError, L"Connect: Connect Error");
+					LeaveCriticalSection(&client->_lock);
+					return 1;
+				} 
 
+			}
 		}
-	}
 
+		client->recvPost();
 
-	client->recvPost();
+	} LeaveCriticalSection(&client->_lock);
 
 
 	return 0;
@@ -67,103 +58,140 @@ unsigned __stdcall CLanClient::connectFunc(void* args){
 }
 
 bool CLanClient::Connect(const wchar_t* ip, unsigned short port, int maxPacketNum, int workerThreadNum, bool onNagle){
-
-	WSAData wsaData;
-	int startupError;
-	if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0){
-
-		startupError = WSAGetLastError();
-		OnError(startupError, L"Connect: WSA Startup Error");
-		return false;
-
-	}
-
-	_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	int socketError;
-	if(_sock == INVALID_SOCKET){
-
-		socketError = WSAGetLastError();
-		OnError(socketError, L"Connect: Socket Error");
-		return false;
-
-	}
-
-	int ioctlResult;
-	int ioctlError;
-	u_long setNonBlock = 1;
-	ioctlResult = ioctlsocket(_sock, FIONBIO, &setNonBlock);
-	if(ioctlResult == SOCKET_ERROR){
-
-		ioctlError = WSAGetLastError();
-		OnError(ioctlError, L"Connect: Set Non Blocking Socket Error");
-		return false;
-
-	}
-
-	int onNagleResult;
-	int onNagleError;
-	onNagleResult = setsockopt(_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&onNagle, sizeof(bool));
-	if(onNagleResult == SOCKET_ERROR){
-
-		onNagleError = WSAGetLastError();
-		OnError(onNagleError, L"Connect: Nagle Option Set Error");
-		return false;
-
-	}
-
-	_ip = ip;
-	_port = port;
-
-	_beginthreadex(nullptr, 0, connectFunc, (void*)this, 0, nullptr);
-
-	_packetNum = maxPacketNum;
-	_packets = (CPacketPtr*)HeapAlloc(_heap, 0, sizeof(CPacketPtr) * _packetNum);
 	
-	_workerThreadNum = workerThreadNum;
-	_workerThread = (HANDLE*)HeapAlloc(_heap, 0, sizeof(HANDLE) * _workerThreadNum);
-	for(int threadCnt = 0; threadCnt < _workerThreadNum; ++threadCnt){
-		_workerThread[threadCnt] = (HANDLE)_beginthreadex(nullptr, 0, completionStatusFunc, (void*)this, 0, nullptr);
-	}
+	EnterCriticalSection(&_lock); {
 
-	_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, workerThreadNum);
-	int iocpError;
-	if(_iocp == NULL){
+		////////////////////////////////////////////////////////////////////////////
+		// init client
+		_sendPosted = false;
+
+		_packetNum = 0;
+		_packetCnt = 0;
+		_packets = nullptr;
+
+		_workerThreadNum = 0;
+		_workerThread = nullptr;
+
+		_sock = NULL;
+		_iocp = NULL;
+
+		ZeroMemory(&_sendOverlapped, sizeof(OVERLAPPED));
+		ZeroMemory(&_recvOverlapped, sizeof(OVERLAPPED));
+
+		_sendCnt = 0;
+		_recvCnt = 0;
+		_sendTPS = 0;
+		_recvTPS = 0;
+		////////////////////////////////////////////////////////////////////////////
+
+		WSAData wsaData;
+		int startupError;
+		if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0){
+
+			startupError = WSAGetLastError();
+			OnError(startupError, L"Connect: WSA Startup Error");
+			LeaveCriticalSection(&_lock);
+			return false;
+
+		}
+
+		_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		int socketError;
+		if(_sock == INVALID_SOCKET){
+
+			socketError = WSAGetLastError();
+			OnError(socketError, L"Connect: Socket Error");
+			LeaveCriticalSection(&_lock);
+			return false;
+
+		}
+
+		int ioctlResult;
+		int ioctlError;
+		u_long setNonBlock = 1;
+		ioctlResult = ioctlsocket(_sock, FIONBIO, &setNonBlock);
+		if(ioctlResult == SOCKET_ERROR){
+
+			ioctlError = WSAGetLastError();
+			OnError(ioctlError, L"Connect: Set Non Blocking Socket Error");
+			LeaveCriticalSection(&_lock);
+			return false;
+
+		}
+
+		int onNagleResult;
+		int onNagleError;
+		onNagleResult = setsockopt(_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&onNagle, sizeof(bool));
+		if(onNagleResult == SOCKET_ERROR){
+
+			onNagleError = WSAGetLastError();
+			OnError(onNagleError, L"Connect: Nagle Option Set Error");
+			LeaveCriticalSection(&_lock);
+			return false;
+
+		}
+
+		_ip = ip;
+		_port = port;
+
+		_beginthreadex(nullptr, 0, connectFunc, (void*)this, 0, nullptr);
+
+		_packetNum = maxPacketNum;
+		_packets = (CPacketPointer*)HeapAlloc(_heap, HEAP_ZERO_MEMORY, sizeof(CPacketPointer) * _packetNum);
+	
+		_workerThreadNum = workerThreadNum;
+		_workerThread = (HANDLE*)HeapAlloc(_heap, 0, sizeof(HANDLE) * _workerThreadNum);
+		for(int threadCnt = 0; threadCnt < _workerThreadNum; ++threadCnt){
+			_workerThread[threadCnt] = (HANDLE)_beginthreadex(nullptr, 0, completionStatusFunc, (void*)this, 0, nullptr);
+		}
+
+		_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, workerThreadNum);
+		int iocpError;
+		if(_iocp == NULL){
 		
-		iocpError = GetLastError();
-		OnError(iocpError, L"Connect: IOCP Create Error");
-		return false;
+			iocpError = GetLastError();
+			OnError(iocpError, L"Connect: IOCP Create Error");
+			LeaveCriticalSection(&_lock);
+			return false;
 
-	}
+		}
+
+	} LeaveCriticalSection(&_lock);
 
 	return true;
 }
 
 bool CLanClient::Disconnect(){
 
-	closesocket(_sock);
+	EnterCriticalSection(&_lock); {
 
-	HeapFree(_heap, 0, _packets);
-	_packets = nullptr;
+		closesocket(_sock);
 
-	HeapFree(_heap, 0, _workerThread);
-	_workerThread = nullptr;
+		HeapFree(_heap, 0, _packets);
+		_packets = nullptr;
 
-	init();
+		HeapFree(_heap, 0, _workerThread);
+		_workerThread = nullptr;
+
+	} LeaveCriticalSection(&_lock);
 
 	return true;
 }
 
-bool CLanClient::sendPacket(CPacketPtrLan packet){
+bool CLanClient::sendPacket(CPacketPtr_Lan packet){
 	
-	packet.setHeader();
+	EnterCriticalSection(&_lock); {
 
-	packet.incRef();
-	_sendQueue.push(packet);
+		packet.setHeader();
 
-	bool sendPosted = InterlockedExchange8((CHAR*)&_sendPosted, true);
-	if(sendPosted == false){
-		sendPost();
-	}
+		packet.incRef();
+		_sendQueue.push(packet);
+
+		if(_sendPosted == false){
+			sendPost();
+		}
+
+	} LeaveCriticalSection(&_lock);
 
 	return true;
 
@@ -172,62 +200,63 @@ bool CLanClient::sendPacket(CPacketPtrLan packet){
 unsigned CLanClient::completionStatusFunc(void *args){
 	
 	CLanClient* client = (CLanClient*)args;
+	CRITICAL_SECTION* lock = &client->_lock;
+	CQueue<CPacketPointer>* sendQueue = &client->_sendQueue;
+	CRingBuffer* recvBuffer = &client->_recvBuffer;
+	CPacketPointer* packets = client->_packets;
 
 	HANDLE iocp = client->_iocp;
 
-	while(1){
+	for(;;){
 		
 		unsigned int transferred;
 		unsigned __int64 sessionID;
 		OVERLAPPED* overlapped;
 		GetQueuedCompletionStatus(iocp, (LPDWORD)&transferred, (PULONG_PTR)&sessionID, &overlapped, INFINITE);
 		
-		//printf("OVERLAPPED: %I64x\n", overlapped);
+		EnterCriticalSection(lock); {
 
-		if(overlapped == nullptr){
-			break;			
-		}
+			if(overlapped == nullptr){
+				LeaveCriticalSection(lock);
+				break;			
+			}
 			
-		if(&client->_sendOverlapped == overlapped){
+			if(&client->_sendOverlapped == overlapped){
 		
-			int packetNum = client->_packetCnt;
-			CPacketPtr* packets = client->_packets;
-			CPacketPtr* packetIter = packets;
-			CPacketPtr* packetEnd = packets + packetNum;
-			for(; packetIter != packetEnd; ++packetIter){
-				packetIter->decRef();
-			}
-			
-			client->_packetCnt = 0;
-			
-			InterlockedExchange8((char*)&client->_sendPosted, false);
-			
-			CLockFreeQueue<CPacketPtr>* sendQueue = &client->_sendQueue;
-			
-			//printf("%I64d\n", sendQueue->getSize());
-			if(sendQueue->getSize() != 0){
-
-				bool sendProcessing = InterlockedExchange8((char*)&client->_sendPosted, true);
-				if(sendProcessing == false){
-					client->sendPost();
+				int packetNum = client->_packetCnt;
+				CPacketPointer* packetIter = packets;
+				CPacketPointer* packetEnd = packets + packetNum;
+				for(; packetIter != packetEnd; ++packetIter){
+					packetIter->decRef();
+					packetIter->~CPacketPointer();
 				}
+			
+				client->_packetCnt = 0;
+				client->_sendCnt += packetNum;
+				
+				client->OnSend(1);
+
+				if(sendQueue->size() != 0){
+					client->sendPost();
+				} else {
+					client->_sendPosted = false;
+				}
+			
 			}
+
+			if(&client->_recvOverlapped == overlapped){
+
+				// recv 완료
+				recvBuffer->moveRear(transferred);
+
+				// packet proc
+				client->checkCompletePacket(sessionID, recvBuffer);
+
+				client->recvPost();
 			
-		}
+			}
 
-		if(&client->_recvOverlapped == overlapped){
-
-			// recv 완료
-			CRingBuffer* recvBuffer = &client->_recvBuffer;
-
-			recvBuffer->moveRear(transferred);
-
-			// packet proc
-			client->checkCompletePacket(sessionID, recvBuffer);
-
-			client->recvPost();
-			
-		}
+		} LeaveCriticalSection(lock);
 
 	}
 
@@ -277,21 +306,16 @@ void CLanClient::recvPost(){
 
 void CLanClient::sendPost(){
 
-	CLockFreeQueue<CPacketPtr>* sendQueue = &_sendQueue;
+	_sendPosted = true;
+
+	CQueue<CPacketPointer>* sendQueue = &_sendQueue;
 	int wsaNum;
 
-	unsigned int usedSize = sendQueue->getSize();
+	unsigned int usedSize = sendQueue->size();
 	wsaNum = usedSize;
 	wsaNum = min(wsaNum, _packetNum);
 
-	if(wsaNum == 0){
-
-		InterlockedExchange8((char*)&_sendPosted, false);
-
-	}
-
 	OVERLAPPED* overlapped = &_sendOverlapped;
-	
 	
 	WSABUF wsaBuf[100];
 	
@@ -299,11 +323,12 @@ void CLanClient::sendPost(){
 
 	int packetNum = wsaNum;
 
-	CPacketPtr packet;
+	CPacketPointer packet;
 
 	for(int packetCnt = 0; packetCnt < packetNum; ++packetCnt){
 		
-		sendQueue->pop(&packet);
+		sendQueue->front(&packet);
+		sendQueue->pop();
 		wsaBuf[packetCnt].buf = packet.getBufStart();
 		wsaBuf[packetCnt].len = packet.getPacketSize();
 		packet.decRef();
@@ -317,16 +342,11 @@ void CLanClient::sendPost(){
 
 	SOCKET sock = _sock;
 
-	
-		//	printf("SEND: %d\n", sock);
 	sendResult = WSASend(sock, wsaBuf, wsaNum, nullptr, 0, overlapped, nullptr);
-	//		printf("SEND RESULT: %d\n", sendResult);
-	//		printf("send overlapped: %I64x\n", overlapped);
 	if(sendResult == SOCKET_ERROR){
 		sendError = WSAGetLastError();
 		if(sendError != WSA_IO_PENDING){
 			Disconnect();
-			
 			return ;
 		}
 	}	
@@ -340,22 +360,22 @@ void CLanClient::checkCompletePacket(unsigned __int64 sessionID, CRingBuffer* re
 		
 		stHeader header;
 
-		recvBuffer->front(sizeof(stHeader), (char*)&header);
+		recvBuffer->frontBuffer(sizeof(stHeader), (char*)&header);
 
 		int payloadSize = header.size;
 		int packetSize = payloadSize + sizeof(stHeader);
 
 		if(usedSize >= packetSize){
 			
-			recvBuffer->pop(sizeof(stHeader));
+			recvBuffer->popBuffer(sizeof(stHeader));
 
-			CPacketPtrLan packet;
+			CPacketPtr_Lan packet;
 			//packet << header.size;
 			memcpy(packet.getBufStart(), &header.size, sizeof(stHeader::size));
-			recvBuffer->front(payloadSize, packet.getRearPtr());
+			recvBuffer->frontBuffer(payloadSize, packet.getRearPtr());
 			packet.moveRear(payloadSize);
 
-			recvBuffer->pop(payloadSize);
+			recvBuffer->popBuffer(payloadSize);
 
 			packet.moveFront(sizeof(stHeader));
 
