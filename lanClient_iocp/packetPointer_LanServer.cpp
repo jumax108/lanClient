@@ -1,16 +1,17 @@
+
+#include "objectFreeListTLS/headers/objectFreeListTLS.h"
 #include "headers/packetPointer_LanServer.h"
 
-void CPacketPtr_Lan::setHeader(){
+void CPacketPtr_Lan::setHeader() {
 
-	stHeader header;
-	header.size = _packet->_buffer.getUsedSize() - sizeof(stHeader);
+	CProtocolBuffer* buffer = &_packet->_buffer;
 
-	printf("header size: %d\n", header.size);
-	memcpy(_packet->_buffer.getBufStart(), &header, sizeof(stHeader));
+	stHeader* header = (stHeader*)buffer->getBufStart();
+	header->size = buffer->getUsedSize() - sizeof(stHeader);
 
 }
 
-CPacketPtr_Lan::CPacketPtr_Lan(){
+CPacketPtr_Lan::CPacketPtr_Lan() {
 
 	this->_packet->_buffer.moveRear(sizeof(stHeader));
 

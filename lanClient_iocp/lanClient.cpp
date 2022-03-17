@@ -39,12 +39,13 @@ unsigned __stdcall CLanClient::connectFunc(void* args){
 					CreateIoCompletionPort((HANDLE)client->_sock, (HANDLE)client->_iocp, NULL, 0);
 					client->OnEnterJoinServer();
 					break;
+				} else if(connectError == WSAEALREADY){
+					continue;
 				} else if(connectError != WSAEWOULDBLOCK){
 					client->OnError(connectError, L"Connect: Connect Error");
 					LeaveCriticalSection(&client->_lock);
 					return 1;
-				} 
-
+				}
 			}
 		}
 
@@ -226,7 +227,11 @@ unsigned CLanClient::completionStatusFunc(void *args){
 				int packetNum = client->_packetCnt;
 				CPacketPointer* packetIter = packets;
 				CPacketPointer* packetEnd = packets + packetNum;
+
+				int packetTotalSize = 0;
+
 				for(; packetIter != packetEnd; ++packetIter){
+					packetTotalSize += packetIter->getPacketSize();
 					packetIter->decRef();
 					packetIter->~CPacketPointer();
 				}
@@ -234,7 +239,7 @@ unsigned CLanClient::completionStatusFunc(void *args){
 				client->_packetCnt = 0;
 				client->_sendCnt += packetNum;
 				
-				client->OnSend(1);
+				client->OnSend(packetTotalSize);
 
 				if(sendQueue->size() != 0){
 					client->sendPost();
@@ -324,6 +329,7 @@ void CLanClient::sendPost(){
 	int packetNum = wsaNum;
 
 	CPacketPointer packet;
+	packet.decRef();
 
 	for(int packetCnt = 0; packetCnt < packetNum; ++packetCnt){
 		
@@ -331,6 +337,7 @@ void CLanClient::sendPost(){
 		sendQueue->pop();
 		wsaBuf[packetCnt].buf = packet.getBufStart();
 		wsaBuf[packetCnt].len = packet.getPacketSize();
+
 		packet.decRef();
 
 		_packets[packetCnt] = packet;
