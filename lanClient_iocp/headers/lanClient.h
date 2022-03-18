@@ -48,7 +48,7 @@ public:
 	virtual void OnEnterJoinServer() = 0;
 	virtual void OnLeaveServer() = 0;
 
-	virtual void OnRecv(CPacketPointer) = 0;
+	virtual void OnRecv(CPacketPtr_Lan) = 0;
 	virtual void OnSend(int sendsize) = 0;
 
 	virtual void OnError(int errorcode, const wchar_t*) = 0;
@@ -64,7 +64,7 @@ protected:
 	
 	SOCKET _sock;
 
-	CQueue<CPacketPointer> _sendQueue;
+	CQueue<CPacketPtr_Lan> _sendQueue;
 	CRingBuffer _recvBuffer;
 		
 	// send를 1회로 제한하기 위한 플래그
@@ -73,12 +73,14 @@ protected:
 	OVERLAPPED _sendOverlapped;
 	OVERLAPPED _recvOverlapped;
 
-	CPacketPointer* _packets;
+	CPacketPtr_Lan* _packets;
 	int _packetNum;
 	int _packetCnt;
 
 	int _workerThreadNum;
 	HANDLE* _workerThread;
+
+	HANDLE _tpsCalcThread;
 
 	HANDLE _iocp;
 
@@ -97,6 +99,8 @@ protected:
 
 	void sendPost();
 	void recvPost();
+
+	static unsigned __stdcall tpsCalcFunc(void* args);
 
 	static unsigned __stdcall completionStatusFunc(void* args);
 

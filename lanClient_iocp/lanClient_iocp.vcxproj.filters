@@ -13,6 +13,18 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="stack">
+      <UniqueIdentifier>{a0e6956d-c1db-41d8-b443-6f97593ad347}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="queue">
+      <UniqueIdentifier>{7c284c94-4f30-49a7-a4cf-2a07743b87f9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="objectFreeList">
+      <UniqueIdentifier>{b37bd95e-1f01-418d-ae42-8a72e1746bbd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="objectFreeListTLS">
+      <UniqueIdentifier>{28b5814c-0a3a-4919-8556-f512e317a476}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="headers\lanClient.h">
@@ -23,6 +35,18 @@
     </ClInclude>
     <ClInclude Include="headers\packetPointer_LanServer.h">
       <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\objectFreeListTLS\headers\common.h">
+      <Filter>objectFreeListTLS</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\objectFreeList\headers\common.h">
+      <Filter>objectFreeList</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\queue\headers\common.h">
+      <Filter>queue</Filter>
+    </ClInclude>
+    <ClInclude Include="lib\stack\headers\common.h">
+      <Filter>stack</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

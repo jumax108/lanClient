@@ -8,6 +8,13 @@ CLanClient::CLanClient(): _recvBuffer(5000), _sendQueue(5000){
 
 	InitializeCriticalSectionAndSpinCount(&_lock, 0);
 
+	_sendCnt = 0;
+	_recvCnt = 0;
+	_sendTPS = 0;
+	_recvTPS = 0;
+
+	_tpsCalcThread = (HANDLE)_beginthreadex(nullptr, 0, tpsCalcFunc, this, 0, nullptr);
+
 }
 CLanClient::~CLanClient(){
 
@@ -138,7 +145,7 @@ bool CLanClient::Connect(const wchar_t* ip, unsigned short port, int maxPacketNu
 		_beginthreadex(nullptr, 0, connectFunc, (void*)this, 0, nullptr);
 
 		_packetNum = maxPacketNum;
-		_packets = (CPacketPointer*)HeapAlloc(_heap, HEAP_ZERO_MEMORY, sizeof(CPacketPointer) * _packetNum);
+		_packets = (CPacketPtr_Lan*)HeapAlloc(_heap, HEAP_ZERO_MEMORY, sizeof(CPacketPtr_Lan) * _packetNum);
 	
 		_workerThreadNum = workerThreadNum;
 		_workerThread = (HANDLE*)HeapAlloc(_heap, 0, sizeof(HANDLE) * _workerThreadNum);
@@ -202,9 +209,9 @@ unsigned CLanClient::completionStatusFunc(void *args){
 	
 	CLanClient* client = (CLanClient*)args;
 	CRITICAL_SECTION* lock = &client->_lock;
-	CQueue<CPacketPointer>* sendQueue = &client->_sendQueue;
+	CQueue<CPacketPtr_Lan>* sendQueue = &client->_sendQueue;
 	CRingBuffer* recvBuffer = &client->_recvBuffer;
-	CPacketPointer* packets = client->_packets;
+	CPacketPtr_Lan* packets = client->_packets;
 
 	HANDLE iocp = client->_iocp;
 
@@ -225,15 +232,15 @@ unsigned CLanClient::completionStatusFunc(void *args){
 			if(&client->_sendOverlapped == overlapped){
 		
 				int packetNum = client->_packetCnt;
-				CPacketPointer* packetIter = packets;
-				CPacketPointer* packetEnd = packets + packetNum;
+				CPacketPtr_Lan* packetIter = packets;
+				CPacketPtr_Lan* packetEnd = packets + packetNum;
 
 				int packetTotalSize = 0;
 
 				for(; packetIter != packetEnd; ++packetIter){
 					packetTotalSize += packetIter->getPacketSize();
 					packetIter->decRef();
-					packetIter->~CPacketPointer();
+					packetIter->~CPacketPtr_Lan();
 				}
 			
 				client->_packetCnt = 0;
@@ -313,7 +320,7 @@ void CLanClient::sendPost(){
 
 	_sendPosted = true;
 
-	CQueue<CPacketPointer>* sendQueue = &_sendQueue;
+	CQueue<CPacketPtr_Lan>* sendQueue = &_sendQueue;
 	int wsaNum;
 
 	unsigned int usedSize = sendQueue->size();
@@ -328,7 +335,7 @@ void CLanClient::sendPost(){
 
 	int packetNum = wsaNum;
 
-	CPacketPointer packet;
+	CPacketPtr_Lan packet;
 	packet.decRef();
 
 	for(int packetCnt = 0; packetCnt < packetNum; ++packetCnt){
@@ -358,7 +365,6 @@ void CLanClient::sendPost(){
 		}
 	}	
 }
-
 void CLanClient::checkCompletePacket(unsigned __int64 sessionID, CRingBuffer* recvBuffer){
 	
 	unsigned int usedSize = recvBuffer->getUsedSize();
@@ -386,6 +392,8 @@ void CLanClient::checkCompletePacket(unsigned __int64 sessionID, CRingBuffer* re
 
 			packet.moveFront(sizeof(stHeader));
 
+			InterlockedIncrement((LONG*)&_recvCnt);
+
 			OnRecv(packet);
 
 			packet.decRef();
@@ -397,4 +405,30 @@ void CLanClient::checkCompletePacket(unsigned __int64 sessionID, CRingBuffer* re
 		}
 
 	}
+}
+
+unsigned __stdcall CLanClient::tpsCalcFunc(void* args){
+
+	CLanClient* client = (CLanClient*)args;
+
+	int* sendCnt = &client->_sendCnt;
+	int* recvCnt = &client->_recvCnt;
+
+	int* sendTPS = &client->_sendTPS;
+	int* recvTPS = &client->_recvTPS;
+
+	for(;;){
+
+		*sendTPS = *sendCnt;
+		*recvTPS = *recvCnt;
+
+		InterlockedExchange((LONG*)sendCnt, 0);
+		InterlockedExchange((LONG*)recvCnt, 0);
+
+		Sleep(999);
+
+	}
+
+	return 0;
+
 }
