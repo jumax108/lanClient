@@ -174,6 +174,7 @@ bool CLanClient::Disconnect(){
 	EnterCriticalSection(&_lock); {
 
 		closesocket(_sock);
+		_sock = 0;
 
 		HeapFree(_heap, 0, _packets);
 		_packets = nullptr;
@@ -244,7 +245,7 @@ unsigned CLanClient::completionStatusFunc(void *args){
 				}
 			
 				client->_packetCnt = 0;
-				client->_sendCnt += packetNum;
+				InterlockedAdd((LONG*)&client->_sendCnt, packetNum);
 				
 				client->OnSend(packetTotalSize);
 
@@ -310,6 +311,7 @@ void CLanClient::recvPost(){
 		recvError = WSAGetLastError();
 		if(recvError != WSA_IO_PENDING){
 			OnError(recvError, L"RecvPost: Recv Error");
+			OnLeaveServer();
 			Disconnect();
 			return ;
 		}
@@ -360,6 +362,8 @@ void CLanClient::sendPost(){
 	if(sendResult == SOCKET_ERROR){
 		sendError = WSAGetLastError();
 		if(sendError != WSA_IO_PENDING){
+			OnError(sendError, L"RecvPost: Recv Error");
+			OnLeaveServer();
 			Disconnect();
 			return ;
 		}
@@ -383,7 +387,7 @@ void CLanClient::checkCompletePacket(unsigned __int64 sessionID, CRingBuffer* re
 			recvBuffer->popBuffer(sizeof(stHeader));
 
 			CPacketPtr_Lan packet;
-			//packet << header.size;
+
 			memcpy(packet.getBufStart(), &header.size, sizeof(stHeader::size));
 			recvBuffer->frontBuffer(payloadSize, packet.getRearPtr());
 			packet.moveRear(payloadSize);
