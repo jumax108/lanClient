@@ -2,24 +2,84 @@
 
 #include "headers/lanClient.h"
 
-CLanClient::CLanClient(): _recvBuffer(5000), _sendQueue(5000){
+CLanClient::CLanClient(int maxPacketNum, int workerThreadNum): _recvBuffer(5000), _sendQueue(5000){
 
 	_heap = HeapCreate(0,0,0);
 
-	InitializeCriticalSectionAndSpinCount(&_lock, 0);
+	if(InitializeCriticalSectionAndSpinCount(&_lock, 0) == false){
+		CDump::crash();
+	}
 
 	_sendCnt = 0;
 	_recvCnt = 0;
 	_sendTPS = 0;
 	_recvTPS = 0;
-
+	
 	_tpsCalcThread = (HANDLE)_beginthreadex(nullptr, 0, tpsCalcFunc, this, 0, nullptr);
+	
+	_sendPosted = false;
+	_disconnected = true;
+
+	_packetNum = 0;
+	_packetCnt = 0;
+	_packets = nullptr;
+
+	_workerThreadNum = 0;
+	_workerThread = nullptr;
+
+	_sock = NULL;
+	_iocp = NULL;
+
+	ZeroMemory(&_sendOverlapped, sizeof(OVERLAPPED));
+	ZeroMemory(&_recvOverlapped, sizeof(OVERLAPPED));
+	
+	_ioCnt = 0;
+
+	_stopEvent = CreateEvent(nullptr, true, false, nullptr);
+
+	_packetNum = maxPacketNum;
+	_packets = (CPacketPtr_Lan*)HeapAlloc(_heap, HEAP_ZERO_MEMORY, sizeof(CPacketPtr_Lan) * _packetNum);
+	
+	_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, workerThreadNum);
+	int iocpError;
+	if(_iocp == NULL){
+		iocpError = GetLastError();
+		CDump::crash();
+	}
+
+	_workerThreadNum = workerThreadNum;
+	_workerThread = (HANDLE*)HeapAlloc(_heap, 0, sizeof(HANDLE) * _workerThreadNum);
+	for(int threadCnt = 0; threadCnt < _workerThreadNum; ++threadCnt){
+		_workerThread[threadCnt] = (HANDLE)_beginthreadex(nullptr, 0, completionStatusFunc, (void*)this, 0, nullptr);
+	}
+	
+		
 
 }
 CLanClient::~CLanClient(){
 
-	HeapDestroy(_heap);
+	SetEvent(_stopEvent);
+	if(WaitForSingleObject(_tpsCalcThread, INFINITE) == WAIT_FAILED){
+		CDump::crash();
+	}
+	CloseHandle(_stopEvent);
 
+	/* worker thread release */ {
+
+		for(int workerThreadCnt = 0; workerThreadCnt < _workerThreadNum; ++workerThreadCnt){
+			PostQueuedCompletionStatus(_iocp, 0, NULL, nullptr);
+		}
+		WaitForMultipleObjects(_workerThreadNum, _workerThread, true, INFINITE);
+		HeapFree(_heap, 0, _workerThread);
+		_workerThread = nullptr;
+	}
+	
+	HeapFree(_heap, 0, _packets);
+	_packets = nullptr;
+
+	CloseHandle(_iocp);
+
+	HeapDestroy(_heap);
 	DeleteCriticalSection(&_lock);
 
 }
@@ -43,7 +103,8 @@ unsigned __stdcall CLanClient::connectFunc(void* args){
 		
 				connectError = WSAGetLastError();
 				if(connectError == WSAEISCONN){
-					CreateIoCompletionPort((HANDLE)client->_sock, (HANDLE)client->_iocp, NULL, 0);
+					client->_disconnected = false;
+					CreateIoCompletionPort((HANDLE)client->_sock, (HANDLE)client->_iocp, NULL, 0);			
 					client->OnEnterJoinServer();
 					break;
 				} else if(connectError == WSAEALREADY){
@@ -60,47 +121,22 @@ unsigned __stdcall CLanClient::connectFunc(void* args){
 
 	} LeaveCriticalSection(&client->_lock);
 
-
 	return 0;
 
 }
 
-bool CLanClient::Connect(const wchar_t* ip, unsigned short port, int maxPacketNum, int workerThreadNum, bool onNagle){
+bool CLanClient::Connect(const wchar_t* ip, unsigned short port, bool onNagle){
 	
 	EnterCriticalSection(&_lock); {
-
-		////////////////////////////////////////////////////////////////////////////
-		// init client
-		_sendPosted = false;
-
-		_packetNum = 0;
-		_packetCnt = 0;
-		_packets = nullptr;
-
-		_workerThreadNum = 0;
-		_workerThread = nullptr;
-
-		_sock = NULL;
-		_iocp = NULL;
-
-		ZeroMemory(&_sendOverlapped, sizeof(OVERLAPPED));
-		ZeroMemory(&_recvOverlapped, sizeof(OVERLAPPED));
-
-		_sendCnt = 0;
-		_recvCnt = 0;
-		_sendTPS = 0;
-		_recvTPS = 0;
-		////////////////////////////////////////////////////////////////////////////
-
+		
 		WSAData wsaData;
 		int startupError;
 		if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0){
 
 			startupError = WSAGetLastError();
-			OnError(startupError, L"Connect: WSA Startup Error");
+			OnError(startupError, L"Constructor: WSA Startup Error");
 			LeaveCriticalSection(&_lock);
-			return false;
-
+			return  false;
 		}
 
 		_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -143,27 +179,7 @@ bool CLanClient::Connect(const wchar_t* ip, unsigned short port, int maxPacketNu
 		_port = port;
 
 		_beginthreadex(nullptr, 0, connectFunc, (void*)this, 0, nullptr);
-
-		_packetNum = maxPacketNum;
-		_packets = (CPacketPtr_Lan*)HeapAlloc(_heap, HEAP_ZERO_MEMORY, sizeof(CPacketPtr_Lan) * _packetNum);
-	
-		_workerThreadNum = workerThreadNum;
-		_workerThread = (HANDLE*)HeapAlloc(_heap, 0, sizeof(HANDLE) * _workerThreadNum);
-		for(int threadCnt = 0; threadCnt < _workerThreadNum; ++threadCnt){
-			_workerThread[threadCnt] = (HANDLE)_beginthreadex(nullptr, 0, completionStatusFunc, (void*)this, 0, nullptr);
-		}
-
-		_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, workerThreadNum);
-		int iocpError;
-		if(_iocp == NULL){
 		
-			iocpError = GetLastError();
-			OnError(iocpError, L"Connect: IOCP Create Error");
-			LeaveCriticalSection(&_lock);
-			return false;
-
-		}
-
 	} LeaveCriticalSection(&_lock);
 
 	return true;
@@ -173,23 +189,59 @@ bool CLanClient::Disconnect(){
 
 	EnterCriticalSection(&_lock); {
 
+		_disconnected = true;
+
 		closesocket(_sock);
 		_sock = 0;
-
-		HeapFree(_heap, 0, _packets);
-		_packets = nullptr;
-
-		HeapFree(_heap, 0, _workerThread);
-		_workerThread = nullptr;
 
 	} LeaveCriticalSection(&_lock);
 
 	return true;
 }
 
+void CLanClient::release(){
+	
+	EnterCriticalSection(&_lock); {
+
+		/* packet release */ {
+			
+			int sendQueueSize = _sendQueue.size();
+
+			CPacketPtr_Lan packet;
+			packet.decRef();
+
+			for(int packetCnt = 0; packetCnt < sendQueueSize; ++packetCnt){
+				_sendQueue.front(&packet);
+				packet.decRef();
+				packet.~CPacketPtr_Lan();
+				_sendQueue.pop();
+			}
+
+			printf("%d\n", sendQueueSize);
+
+			_recvBuffer.moveFront(_recvBuffer.getUsedSize());
+
+		}
+		
+		_sendPosted = false;
+
+		WSACleanup();
+
+		OnLeaveServer();
+
+	} LeaveCriticalSection(&_lock);
+}
+
 bool CLanClient::sendPacket(CPacketPtr_Lan packet){
 	
 	EnterCriticalSection(&_lock); {
+
+		if(_disconnected == true){
+			LeaveCriticalSection(&_lock);
+			packet.decRef();
+			packet.~CPacketPtr_Lan();
+			return false;
+		}
 
 		packet.setHeader();
 
@@ -257,7 +309,7 @@ unsigned CLanClient::completionStatusFunc(void *args){
 			
 			}
 
-			if(&client->_recvOverlapped == overlapped){
+			else if(&client->_recvOverlapped == overlapped){
 
 				// recv ¿Ï·á
 				recvBuffer->moveRear(transferred);
@@ -269,6 +321,11 @@ unsigned CLanClient::completionStatusFunc(void *args){
 			
 			}
 
+			client->_ioCnt -= 1;
+			if(client->_ioCnt == 0){
+				client->release();
+			}
+
 		} LeaveCriticalSection(lock);
 
 	}
@@ -278,6 +335,10 @@ unsigned CLanClient::completionStatusFunc(void *args){
 
 void CLanClient::recvPost(){
 	
+	if(_disconnected == true){
+		return;
+	}
+
 	OVERLAPPED* overlapped = &_recvOverlapped;
 	
 	WSABUF wsaBuf[2];
@@ -305,20 +366,26 @@ void CLanClient::recvPost(){
 	
 	SOCKET sock = _sock;
 	unsigned int flag = 0;
-			//printf("RECV: %d\n", sock);
+
+	_ioCnt += 1;
 	recvResult = WSARecv(sock, wsaBuf, wsaCnt, nullptr, (LPDWORD)&flag, overlapped, nullptr);
 	if(recvResult == SOCKET_ERROR){
 		recvError = WSAGetLastError();
 		if(recvError != WSA_IO_PENDING){
 			OnError(recvError, L"RecvPost: Recv Error");
-			OnLeaveServer();
 			Disconnect();
+			_ioCnt -= 1;
 			return ;
 		}
 	}
 }
 
 void CLanClient::sendPost(){
+
+	if(_disconnected == true){
+		_sendPosted = false;
+		return ;
+	}
 
 	_sendPosted = true;
 
@@ -348,6 +415,7 @@ void CLanClient::sendPost(){
 		wsaBuf[packetCnt].len = packet.getPacketSize();
 
 		packet.decRef();
+		packet.~CPacketPtr_Lan();
 
 		_packets[packetCnt] = packet;
 
@@ -358,13 +426,15 @@ void CLanClient::sendPost(){
 
 	SOCKET sock = _sock;
 
+	_ioCnt += 1;
 	sendResult = WSASend(sock, wsaBuf, wsaNum, nullptr, 0, overlapped, nullptr);
 	if(sendResult == SOCKET_ERROR){
 		sendError = WSAGetLastError();
 		if(sendError != WSA_IO_PENDING){
-			OnError(sendError, L"RecvPost: Recv Error");
-			OnLeaveServer();
+			OnError(sendError, L"SendPost: Send Error");
 			Disconnect();
+			_sendPosted = false;
+			_ioCnt -= 1;
 			return ;
 		}
 	}	
@@ -421,7 +491,16 @@ unsigned __stdcall CLanClient::tpsCalcFunc(void* args){
 	int* sendTPS = &client->_sendTPS;
 	int* recvTPS = &client->_recvTPS;
 
+	HANDLE* stopEvent = &client->_stopEvent;
+
 	for(;;){
+
+		int stopEventReturn = WaitForSingleObject(*stopEvent, 0);
+		if(stopEventReturn == WAIT_OBJECT_0){
+			break;
+		} else if(stopEventReturn == WAIT_FAILED){
+			CDump::crash();
+		}
 
 		*sendTPS = *sendCnt;
 		*recvTPS = *recvCnt;

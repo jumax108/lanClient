@@ -38,10 +38,10 @@ class CLanClient{
 
 public:
 
-	CLanClient();
+	CLanClient(int maxPacketNum, int workerThreadNum);
 	~CLanClient();
 	
-	bool Connect(const wchar_t* ip, unsigned short port, int maxPacketNum, int workerThreadNum, bool onNagle);
+	bool Connect(const wchar_t* ip, unsigned short port, bool onNagle);
 	bool Disconnect();
 	bool sendPacket(CPacketPtr_Lan);
 
@@ -89,16 +89,23 @@ protected:
 
 	CRITICAL_SECTION _lock;
 
+	bool _disconnected;
+
+	int _ioCnt;
+
 	int _sendCnt;
 	int _recvCnt;
 	int _sendTPS;
 	int _recvTPS;
+
+	HANDLE _stopEvent;
 
 	const wchar_t* _ip;
 	unsigned short _port;
 
 	void sendPost();
 	void recvPost();
+	void release();
 
 	static unsigned __stdcall tpsCalcFunc(void* args);
 

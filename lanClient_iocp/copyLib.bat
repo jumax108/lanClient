@@ -1,8 +1,13 @@
 
-mkdir lanClient
+set name="lanClient"
 
-robocopy headers lanClient/headers
-robocopy release lanClient *.pdb
-robocopy release lanClient *.lib
+mkdir %name%
+
+robocopy headers %name%/headers
+robocopy release %name% *.pdb
+robocopy release %name% *.lib
+
+erase release /S /Q
+rd release /S /Q
 
 pause
