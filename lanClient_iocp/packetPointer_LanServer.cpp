@@ -22,6 +22,8 @@ CPacketPtr_Lan::CPacketPtr_Lan() {
 
 	this->_packet->_buffer.moveRear(sizeof(stHeader));
 
+	this->_packet->returnAdr = _ReturnAddress();
+
 	#if defined(PACKET_PTR_LAN_DEBUG)
 		returnAdr = _ReturnAddress();
 

@@ -38,11 +38,12 @@ class CLanClient{
 
 public:
 
-	CLanClient(int maxPacketNum, int workerThreadNum);
+	CLanClient(const wchar_t* ip, unsigned short port,
+				bool onNalge, int maxPacketNum, int workerThreadNum);
 	~CLanClient();
 	
-	bool Connect(const wchar_t* ip, unsigned short port, bool onNagle);
-	bool Disconnect();
+	void requestConnect();
+	bool disconnect();
 	bool sendPacket(CPacketPtr_Lan);
 
 	virtual void OnEnterJoinServer() = 0;
@@ -99,9 +100,14 @@ protected:
 	int _recvTPS;
 
 	HANDLE _stopEvent;
+	HANDLE _connectEvent;
+	HANDLE _connectThread;
 
 	const wchar_t* _ip;
 	unsigned short _port;
+	bool _onNagle;
+
+	bool _firstRecv;
 
 	void sendPost();
 	void recvPost();
@@ -114,4 +120,14 @@ protected:
 	static unsigned __stdcall connectFunc(void *args);
 
 	void checkCompletePacket(unsigned __int64 sessionID, CRingBuffer* recvBuffer);
+
+public:
+
+	struct stLog{
+		wchar_t* msg;
+	};
+
+	stLog _log[65536];
+	unsigned short logIndex;
+
 };

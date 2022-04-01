@@ -48,6 +48,9 @@
     <ClInclude Include="lib\stack\headers\common.h">
       <Filter>stack</Filter>
     </ClInclude>
+    <ClInclude Include="lib\queue\headers\queue.h">
+      <Filter>queue</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="lanClient.cpp">

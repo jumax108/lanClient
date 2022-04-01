@@ -150,6 +150,7 @@
     <ClInclude Include="lib\objectFreeListTLS\headers\common.h" />
     <ClInclude Include="lib\objectFreeList\headers\common.h" />
     <ClInclude Include="lib\queue\headers\common.h" />
+    <ClInclude Include="lib\queue\headers\queue.h" />
     <ClInclude Include="lib\stack\headers\common.h" />
   </ItemGroup>
   <ItemGroup>
