@@ -42,8 +42,8 @@ public:
 				bool onNalge, int maxPacketNum, int workerThreadNum);
 	~CLanClient();
 	
-	void requestConnect();
-	bool disconnect();
+	void Connect();
+	bool Disconnect();
 	bool sendPacket(CPacketPtr_Lan);
 
 	virtual void OnEnterJoinServer() = 0;

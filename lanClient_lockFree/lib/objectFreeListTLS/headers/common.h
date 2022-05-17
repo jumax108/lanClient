@@ -1,6 +1,6 @@
 #pragma once
 
-//#define OBJECT_FREE_LIST_TLS_DEBUG
+#define OBJECT_FREE_LIST_TLS_DEBUG
 
 namespace objectFreeListTLS{
 	// T type data 주소에 이 값을 더하면 node 주소가 됩니다.
@@ -11,7 +11,7 @@ namespace objectFreeListTLS{
 	#endif
 
 	// 하나의 청크에서 사용할 T type 노드의 수 입니다.
-	constexpr int CHUNK_SIZE = 100;
+	constexpr int CHUNK_SIZE = 50000;
 
 	#if defined(OBJECT_FREE_LIST_TLS_DEBUG)
 		constexpr unsigned __int64 UNDERFLOW_CHECK_VALUE = 0xAABBCCDDDDCCBBAA;

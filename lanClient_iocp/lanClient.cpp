@@ -121,116 +121,22 @@ CLanClient::~CLanClient(){
 
 }
 
-unsigned __stdcall CLanClient::connectFunc(void* args){
-
-	CLanClient* client = (CLanClient*)args;
-
-	HANDLE eventObjects[2] = {client->_stopEvent, client->_connectEvent};
-
-	for(;;) {
+void CLanClient::Connect() {
 	
-		int eventResult = WaitForMultipleObjects(2, eventObjects, false, INFINITE);
-		if(eventResult == WAIT_OBJECT_0){
-			break;
-		} else if(eventResult != WAIT_OBJECT_0 + 1){
-			CDump::crash();
-		}
+	_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	int socketError;
+	if(_sock == INVALID_SOCKET){
 
-
-		EnterCriticalSection(&client->_lock); {
-
-			SOCKADDR_IN addr;
-			addr.sin_family = AF_INET;
-			addr.sin_port = htons(client->_port);
-			InetPtonW(AF_INET, client->_ip, &addr.sin_addr.S_un.S_addr);
-
-			int connectError;
-			int connectResult;
-
-			int loopCnt = 0;
-
-			for(;;){
-				connectResult = connect(client->_sock, (SOCKADDR*)&addr, sizeof(SOCKADDR_IN));
-				if(connectResult == SOCKET_ERROR){
-		
-					connectError = WSAGetLastError();
-					if(connectError == WSAEISCONN){
-						client->_disconnected = false;
-						CreateIoCompletionPort((HANDLE)client->_sock, (HANDLE)client->_iocp, NULL, 0);			
-						client->logIndex = 0;
-						client->_log[client->logIndex++].msg = (wchar_t*)L"connect";
-						ZeroMemory(client->_log, sizeof(client->_log));
-
-						client->_firstRecv = true;
-						client->OnEnterJoinServer();
-						client->recvPost();
-						break;
-					} else if(connectError == WSAEALREADY){
-						continue;
-					} else if(connectError != WSAEWOULDBLOCK){
-						client->OnError(connectError, L"Connect: Connect Error");
-						LeaveCriticalSection(&client->_lock);
-						return 1;
-					}
-				}
-				loopCnt += 1;
-				if(loopCnt == 5){
-					client->OnError(30000, L"Connect: time out");
-					break;
-				}
-				Sleep(100);
-			}
-
-		} LeaveCriticalSection(&client->_lock);
+		socketError = WSAGetLastError();
+		CDump::crash();
 
 	}
 
-	return 0;
+
 
 }
 
-void CLanClient::requestConnect(){
-	
-	EnterCriticalSection(&_lock); {
-
-		_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		int socketError;
-		if(_sock == INVALID_SOCKET){
-
-			socketError = WSAGetLastError();
-			CDump::crash();
-
-		}
-
-		int ioctlResult;
-		int ioctlError;
-		u_long setNonBlock = 1;
-		ioctlResult = ioctlsocket(_sock, FIONBIO, &setNonBlock);
-		if(ioctlResult == SOCKET_ERROR){
-
-			ioctlError = WSAGetLastError();
-			CDump::crash();
-
-		}
-
-		int onNagleResult;
-		int onNagleError;
-		onNagleResult = setsockopt(_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&_onNagle, sizeof(bool));
-		if(onNagleResult == SOCKET_ERROR){
-
-			onNagleError = WSAGetLastError();
-			CDump::crash();
-
-		}
-
-		SetEvent(_connectEvent);
-
-	} LeaveCriticalSection(&_lock);
-
-	return ;
-}
-
-bool CLanClient::disconnect(){
+bool CLanClient::Disconnect(){
 
 	EnterCriticalSection(&_lock); {
 
@@ -443,7 +349,7 @@ void CLanClient::recvPost(){
 		recvError = WSAGetLastError();
 		if(recvError != WSA_IO_PENDING){
 			OnError(recvError, L"RecvPost: Recv Error");
-			disconnect();
+			Disconnect();
 			_ioCnt -= 1;
 			return ;
 		}
@@ -506,7 +412,7 @@ void CLanClient::sendPost(){
 		sendError = WSAGetLastError();
 		if(sendError != WSA_IO_PENDING){
 			OnError(sendError, L"SendPost: Send Error");
-			disconnect();
+			Disconnect();
 			_sendPosted = false;
 			_ioCnt -= 1;
 			return ;
